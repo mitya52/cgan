@@ -14,7 +14,7 @@ class Generator:
         self._num_classes = 10
 
         x, y = mnist.load_data()[0 if train else 1]
-        x = np.reshape(x, (-1,) + self._output_shape).astype(np.float32)
+        x = np.reshape(x, (-1,) + self._output_shape).astype(np.float32) / 256.
         y = to_categorical(y, self._num_classes).astype(np.float32)
 
         self._dataset = x, y
@@ -28,9 +28,19 @@ class Generator:
             idx, idy = step * self._batch_size, (step + 1) * self._batch_size
             yield self._dataset[0][idx: idy], self._dataset[1][idx: idy]
 
+    def output_shape(self):
+        return self._output_shape
+
+    def __len__(self):
+        return len(self._dataset[0])
+
 
 if __name__ == '__main__':
-    generator = Generator(batch_size=32)
+    generator = Generator(
+        batch_size=32,
+        train=True)
+    print('Generator of size {}'.format(len(generator)))
+
     for x, y in generator.generate_epoch():
         x, y = np.squeeze(x[0]), np.argmax(y[0])
 
