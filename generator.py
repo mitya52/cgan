@@ -31,6 +31,9 @@ class Generator:
     def output_shape(self):
         return self._output_shape
 
+    def num_classes(self):
+        return self._num_classes
+
     def __len__(self):
         return len(self._dataset[0])
 

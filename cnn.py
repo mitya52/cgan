@@ -23,7 +23,7 @@ class Model:
         logits = tf.layers.dense(inputs=x, units=classes, activation='relu')
 
         self.loss = tf.losses.softmax_cross_entropy(labels_output, logits)
-        self.predictions = tf.argmax(tf.nn.softmax(logits, axis=-1), axis=-1)
+        self.predictions = tf.nn.softmax(logits, axis=-1)
 
     @staticmethod
     def _conv(inputs: tf.Tensor,
