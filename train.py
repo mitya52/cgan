@@ -1,15 +1,33 @@
 import tensorflow as tf
+import tensorflow.contrib.layers as layers
 import numpy as np
-from time import time
+import cv2
+
+from itertools import product
 
 from generator import Generator
-from cnn import Model
+from gan import Model
 
 
 def compute_accuracy(labels, predictions):
     labels = np.argmax(labels, axis=-1)
     predictions = np.argmax(predictions, axis=-1)
     return float(np.count_nonzero(labels == predictions)) / len(labels)
+
+
+def visualize_images(images, grid, scale):
+    bs, h, w, c = images.shape
+    canvas = np.zeros((grid[0] * h, grid[1] * w, c), dtype=np.uint8)
+    for y, x in product(range(grid[0]), range(grid[1])):
+        canvas[y*h:(y+1)*h, x*w:(x+1)*w, :] = (images[y*grid[1]+x] * 256).astype(np.uint8)
+    h, w = canvas.shape[:2]
+    h, w = int(scale * h), int(scale * w)
+    return cv2.resize(canvas, (w, h), interpolation=cv2.INTER_AREA)
+
+
+def steps_by_loss(loss):
+    steps = int(10 * (loss ** 2) + 10)
+    return max(min(1, steps), 10)
 
 
 def train(batch_size: int,
@@ -22,69 +40,82 @@ def train(batch_size: int,
 
     image_shape = train_generator.output_shape()
     num_classes = train_generator.num_classes()
+    latent_dim = 2
 
-    images_input = tf.placeholder(tf.float32, (None,) + image_shape)
-    labels_output = tf.placeholder(tf.float32, (None, num_classes))
-    is_training = tf.placeholder(tf.bool)
+    model = Model(image_shape, num_classes, latent_dim)
 
-    model = Model(images_input, labels_output, is_training, num_classes)
+    g_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'generator')
+    train_g_op = layers.optimize_loss(
+        model.g_loss,
+        tf.train.get_global_step(),
+        optimizer='Adam',
+        learning_rate=0.00003,
+        variables=g_vars)
 
-    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    with tf.control_dependencies(update_ops):
-        train_op = tf.contrib.layers.optimize_loss(
-            model.loss,
-            tf.train.get_global_step(),
-            optimizer='Adam',
-            learning_rate=0.0001,
-            summaries=['loss'])
+    d_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'discriminator')
+    train_d_op = layers.optimize_loss(
+        model.d_loss,
+        tf.train.get_global_step(),
+        optimizer='Adam',
+        learning_rate=0.00001,
+        variables=d_vars)
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
 
-        best_val_loss = 1e15
-        best_val_acc = 0
-        best_epoch = 0
+        d_loss = 1e15
+        g_loss = 1e15
         for epoch in range(epochs):
-            # training phase
+            # D training phase
             losses = []
-            t0 = time()
-            for images, labels in train_generator.generate_epoch():
-                loss = sess.run([train_op], feed_dict={
-                    images_input: images,
-                    labels_output: labels,
-                    is_training: True,
+            for d_step, (images, labels) in enumerate(train_generator.generate_epoch()):
+                z = np.random.uniform(size=(batch_size, latent_dim))
+                loss = sess.run(train_d_op, feed_dict={
+                    model.images_input: images,
+                    model.z_input: z,
+                    model.labels_input: labels,
                 })
                 losses.append(loss)
-            t1 = time()
-            print('Epoch {} train loss: {}'.format(epoch, np.mean(losses)))
-            print('Elapsed time: {:.2f}'.format(t1 - t0))
+                if d_step == steps_by_loss(d_loss):
+                    break
+            d_loss = np.mean(losses)
 
+            # G training phase
             losses = []
-            accuracies = []
-            for images, labels in val_generator.generate_epoch():
-                predictions, loss = sess.run([model.predictions, model.loss], feed_dict={
-                    images_input: images,
-                    labels_output: labels,
-                    is_training: False,
+            for _ in range(steps_by_loss(g_loss)):
+                z = np.random.uniform(size=(batch_size, latent_dim))
+                labels = np.zeros((batch_size, num_classes), dtype=np.float32)
+                labels[np.arange(batch_size), np.random.randint(num_classes, size=batch_size)] = 1.0
+                loss = sess.run(train_g_op, feed_dict={
+                    model.z_input: z,
+                    model.labels_input: labels,
                 })
-                accuracies.append(compute_accuracy(labels, predictions))
                 losses.append(loss)
-            val_loss = np.mean(losses)
-            val_acc = np.mean(accuracies)
+            g_loss = np.mean(losses)
 
-            best_val_loss = min(val_loss, best_val_loss)
-            best_val_acc = val_acc
-            best_epoch = epoch
-
-            print('Val loss: {}'.format(val_loss))
-            print('Val accuracy: {}'.format(val_acc))
+            print('D train new loss: {}'.format(d_loss))
+            print('G train last loss: {}'.format(g_loss))
             print()
 
-        print('Best val loss: {} (acc {}, epoch {})'.format(best_val_loss, best_val_acc, best_epoch))
+            # visualize generator output
+            samples_per_class = 8
+            labels = np.eye(num_classes, num_classes, dtype=np.float32)
+            labels = np.concatenate([labels] * samples_per_class)
+            z = np.random.uniform(size=(num_classes * samples_per_class, latent_dim))
+            generated = sess.run(model.generated, feed_dict={
+                model.z_input: z,
+                model.labels_input: labels,
+            })
+
+            image = visualize_images(generated, grid=(samples_per_class, num_classes), scale=4)
+            cv2.imshow('images', image)
+            k = cv2.waitKey(1) & 0xFF
+            if k == 27:
+                break
 
 
 if __name__ == '__main__':
     batch_size = 64
-    epochs = 100
+    epochs = 10000
 
     train(batch_size, epochs)
