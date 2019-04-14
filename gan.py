@@ -25,14 +25,12 @@ class Model:
 
         self.generated = self._create_generator(self.z_input, self.labels_input)
 
-        discriminated_z = self._create_discriminator(self.generated, self.labels_input)
-        discriminated_image = self._create_discriminator(self.images_input, self.labels_input)
+        d_z = self._create_discriminator(self.generated, self.labels_input)
+        d_image = self._create_discriminator(self.images_input, self.labels_input)
 
-        log_d_image = tf.reduce_mean(-tf.log(discriminated_image + 1e-10))
-        log_d_z = tf.reduce_mean(-tf.log(1. - discriminated_z + 1e-10))
-
-        self.g_loss = -log_d_z
-        self.d_loss = (log_d_image + log_d_z) / 2
+        eps = 1e-15
+        self.g_loss = -tf.reduce_mean(tf.log(d_z + eps))
+        self.d_loss = -tf.reduce_mean(tf.log(d_image + eps) + tf.log(1. - d_z + eps)) / 2.0
 
     def _create_generator(self,
                           z: tf.Tensor,
@@ -47,7 +45,13 @@ class Model:
 
             x = self._conv_g(x, 64, upsample=True, dropout=True)
             x = self._conv_g(x, 32, dropout=True)
-            return self._conv_g(x, c, upsample=True)
+            x = self._conv_g(x, 32, upsample=True)
+            return tf.layers.conv2d(inputs=x,
+                                    filters=c,
+                                    kernel_size=3,
+                                    padding='same',
+                                    activation='sigmoid',
+                                    kernel_initializer='he_normal')
 
     def _create_discriminator(self,
                               images: tf.Tensor,
